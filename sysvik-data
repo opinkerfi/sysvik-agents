@@ -1,0 +1,155 @@
+#!/usr/bin/perl
+#
+#    Copyright (C) 2008-2013 Tryggvi Farestveit <tryggvi@linux.is>
+#
+#   This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this program; if not, write to the Free Software Foundation, Inc.,
+#    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+##############################################################################
+# Please do not edit below
+##############################################################################
+
+# Location of the local.db
+my $local_db = "/var/lib/sysvik/local.db";
+
+my $lock = "/var/run/sysvik-data.pid";
+
+use utf8;
+use strict;
+use lib qw(/var/lib/sysvik);
+use SVcore;
+use Getopt::Std;
+use POSIX;
+our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_q);
+getopts('dvhbq');
+
+my $version = "3.2";
+
+my $sv = SVcore->new(debug => $opt_d, local_db => $local_db);
+
+my $os_type = $sv->DetectOS();
+
+my ($timer_cpu, $timer_connect);
+my ($prev_cpu_user, $prev_cpu_nice, $prev_cpu_system, $prev_cpu_idle); # Global variables for calculating idle cpu
+
+sub daemonize {
+	print "Running in background....\n" unless $opt_q;
+	chdir '/'               or die "Can't chdir to /: $!";
+	open STDIN, '/dev/null' or die "Can't read /dev/null: $!";
+	open STDOUT, '>/dev/null' or die "Can't write to /dev/null: $!";
+	defined(my $pid = fork) or die "Can't fork: $!";
+	exit if $pid;
+	$sv->lock_on($lock);
+	setsid or die "Can't start a new session: $!";
+	open STDERR, '>&STDOUT' or die "Can't dup stdout: $!";
+}
+
+sub cpu_idle(){
+        # Every five second we take the current idle status of the total CPU and record it in our database. We keep 
+        # 15 minuates of this data. One minutes are 12 records and fifteen minutes are 180 records. We keep this
+        # information in a single line in our DB and divided by two semicolon (";;") this is a overhead.
+        # We need to look at these 180 entries as a 180 entires of 3 letters plus 2 overhead letters. As for that (180*5) = 900
+	my $letters = 900;
+
+	my $str = $sv->seekstr("cpu_idle_total"); # Lets get the current data
+	$sv->printlog("Current cpu data: $str");
+	my $idle_total;
+
+	if($os_type eq "linux"){
+		$sv->printlog("Opening /proc/stat");
+		open(STAT, "/proc/stat");
+		while(<STAT>){
+			chomp($_);
+			my @line_arr = split;
+			my $var = $line_arr[0];
+
+			if($var eq "cpu"){
+				# Total CPU
+				my $cpu_user = $line_arr[1];
+				my $cpu_nice = $line_arr[2];
+				my $cpu_system = $line_arr[3];
+				my $cpu_idle = $line_arr[4];
+				my $total;
+	
+				if($prev_cpu_user){
+					$total = ($cpu_user - $prev_cpu_user) + ($cpu_nice - $prev_cpu_nice) + ($cpu_system - $prev_cpu_system) + ($cpu_idle - $prev_cpu_idle);
+					my $idle_percent = (($cpu_idle - $prev_cpu_idle) * 100) / $total;
+					$idle_total = sprintf "%.0f", $idle_percent;
+					$sv->printlog("Calc based on previous results: $idle_total");
+				}
+				$prev_cpu_user = $cpu_user;
+				$prev_cpu_nice = $cpu_nice;
+				$prev_cpu_system = $cpu_system;
+				$prev_cpu_idle = $cpu_idle;
+			}
+			close(STAT);
+			$sv->printlog("Closing /proc/stat");
+		}
+	} elsif($os_type eq "aix"){
+		open(CPU, "/usr/bin/iostat -t 1 2 | /usr/bin/tail -1|");
+		while(<CPU>){
+			chomp($_);
+			my(@items) = split(/ +/,$_);
+			$idle_total = sprintf "%.0f", $items[5];
+		}
+		close(CPU);
+	}
+
+	if($idle_total < 10){
+		$idle_total = "00$idle_total";
+	} elsif ($idle_total < 100){
+		$idle_total = "0$idle_total";
+	}
+	$str = "$idle_total;;$str";
+	my $str_new = substr($str, 0, $letters);
+	$sv->putstr("cpu_idle_total", $str_new); # Insert the new string to the local.db
+	$sv->putstr("cpu_idle_lastrun", time());
+}
+
+################# MAIN
+if($opt_h || (!$opt_d && !$opt_b)){
+	print "sysvik [OPTIONS] ...\n\n";
+	print "Optional options:\n";
+	print "  -d\tDebug\n";
+	print "  -b\tRun in background\n";
+	print "  -q\tQuiet\n";
+	print "  -h\tPrints this text\n";
+	print "  -v\tPrints version information\n";
+	exit;
+} elsif ($opt_v){
+	print "sysvik-data $version\n";
+	exit;
+}
+
+if($opt_b){
+	daemonize()
+} else {
+	$sv->lock_on($lock);
+}
+
+my $loop=1;
+while($loop eq 1){
+	# Loop forever
+
+	if(!$timer_cpu || $timer_cpu <= time()){
+		# CPU idle status
+		# This  process checks the current status of the total IDLE process of the CPU and records it in our
+		# local.db. This information is then used to calculate avg idle for 1 min, 5 and 15 min
+		cpu_idle();
+		$timer_cpu = time() + 5; # Next check is after 5 secs
+		$sv->printlog("Next CPU check: $timer_cpu");
+	}
+	sleep(1);
+}
+
+$sv->lock_off($lock);

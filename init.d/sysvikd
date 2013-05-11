@@ -1,0 +1,75 @@
+#!/bin/bash
+#
+# sysvik:	Sysvik monitor
+#
+# chkconfig: 345 80 60
+# description:  Sysvik monitor
+#
+# processname: scimd
+# pidfile: /var/run/sysvik.pid
+#
+# Version: 20081011-01
+#
+# Source function library.
+. /var/lib/sysvik/initrd-functions
+
+# so we can rearrange this easily
+processname=sysvik-data
+servicename=sysvik-data
+
+RETVAL=0
+
+start() {
+    echo -n $"Starting Sysvik-data: "
+    if [ -x /usr/sbin/sysvik-data ] ; then
+	    daemon /usr/sbin/sysvik-data -b -q
+	    RETVAL=$?
+	    echo
+		if [ ! -d "/var/lock/subsys" ]; then
+			mkdir -p /var/lock/subsys
+		fi
+	    [ $RETVAL -eq 0 ] && touch /var/lock/subsys/$servicename
+    fi
+}
+
+stop() {
+    echo -n $"Stopping Sysvik-data: "
+
+    killproc $servicename -TERM
+    RETVAL=$?
+    echo
+    if [ $RETVAL -eq 0 ]; then
+        rm -f /var/lock/subsys/$servicename
+        rm -f /var/run/sysvik-data.pid
+    fi
+}
+
+# See how we were called.
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    status)
+        status $processname
+        RETVAL=$?
+        ;;
+    restart)
+        stop
+        start
+        ;;
+    condrestart)
+        if [ -f /var/lock/subsys/$servicename ]; then
+            stop
+            start
+        fi
+        ;;
+    *)
+        echo $"Usage: $0 {start|stop|status|restart|condrestart|reload}"
+        ;;
+esac
+exit $RETVAL
+
+

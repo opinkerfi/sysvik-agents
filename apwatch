@@ -1,0 +1,417 @@
+#!/usr/bin/perl
+#    Copyright (C) 2007-2013 Tryggvi Farestveit <tryggvi@linux.is>
+#
+#   This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License along
+#    with this program; if not, write to the Free Software Foundation, Inc.,
+#    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+##############################################################################
+#
+# apwatch tries locate update.dat under /etc/sysvik which should include
+# information about what update tool this operating system uses. This can be 
+# apt, yum, up2date or other. The information about the update tool is gotten
+# from the sysvik network.
+#
+##############################################################################
+# Please do not edit below
+##############################################################################
+my $version = "3.2";
+use strict;
+use warnings;
+use Getopt::Std;
+getopts('dhvt:');
+our ($opt_d, $opt_h, $opt_v, $opt_t);
+
+my ($spool, $spoolfile, $utool);
+
+sub main() {
+
+	if($opt_h){
+		print "Usage: apwatch [OPTION]...\n\nOptional options:\n\t-d\tDebug\n\t-h\tdisplay this help and exit\n\t-v\tDisplay version and exit\n\t-t <seconds>\tTimeout checking updates\n";
+		exit;
+	} elsif ($opt_v){
+		print "apwatch $version\nWritten by: Tryggvi Farestveit <tryggvi\@linux.is>\n";
+		exit;
+	}
+
+	my $updfile = "/etc/sysvik/update.dat";
+	$spool = "/var/spool/sysvik";
+	$spoolfile = "$spool/updates";
+
+	# Set timeout for fetching packages
+	my $timeout = (defined $opt_t and int($opt_t) or 120);
+
+	# Lets find out what update tool this node uses
+	my ($update_tool, $product, $product_version);
+	if(!-e $updfile){
+		print "Unable to find $updfile\n";
+		exit;
+	} else {
+		open(UPD, "$updfile");
+			while(<UPD>){
+				chomp($_);
+				if($_ !~ "#"){
+					($product, $product_version) = split(";;", $_);
+					last;
+				}
+			}
+		close(UPD);
+	}
+
+	my $utool;
+	if($product eq "Red Hat Enterprise" && $product_version < 5){
+		# rhel 2-4
+		$utool = "up2date";
+		rhn_regcheck(); # Check if the node has registerd to RHN
+	} elsif ($product eq "Red Hat Enterprise"){
+		# rhel 5+
+		$utool = "yum";
+		rhn_regcheck(); # Check if the node has registerd to RHN
+	} elsif ($product eq "CentOS"){
+		# centos
+		$utool = "yum";
+	} elsif ($product eq "Debian"){
+		# Debian
+		$utool = "apt-get";
+	} elsif ($product eq "Ubuntu"){
+		# ubuntu
+		$utool = "apt-get";
+	} elsif ($product eq "Fedora"){
+		# Fedora
+		$utool = "yum";
+	} elsif ($product eq "openSUSE"){
+		# openSUSE
+		$utool = "rug";
+	} elsif ($product eq "SUSE Linux Enterprise Server"){
+		# SUSE Linux Enterprise Server
+		$utool = "rug";
+	} elsif ($product eq "AIX"){
+		$utool = "suma";
+	} else {
+		my @packages;
+		$packages[0] = "error;;error;;error";
+		write_out(@packages);
+		print "Error: Unable to find update tool.\n";
+		exit;
+	}
+
+	$SIG{'ALRM'} = sub {
+		print STDERR "Timeout in fetching update information\n";
+		exit(1);
+	};
+
+	alarm($timeout);
+
+	if($utool eq "yum" || $utool eq "apt-get" || $utool eq "up2date" || $utool eq "rug" || $utool eq "suma"){
+		printlog("Using: $utool");
+		my @packages;
+		if($utool eq "yum"){
+			# This node uses yum
+			@packages = yum();
+		} elsif ($utool eq "up2date"){
+			# This node uses up2date
+			@packages = up2date();
+		} elsif ($utool eq "apt-get"){
+			@packages = apt_get();
+		} elsif ($utool eq "rug"){
+			@packages = rug();
+		} elsif ($utool eq "suma"){
+			@packages = suma();
+		}
+		write_out(@packages);
+	} else {
+		printlog("None update tool or disabled ($update_tool)");
+		exit;
+	}
+
+	alarm(0);
+	exit(0);
+}
+
+# suma (AIX):
+sub suma(){
+	my @packages;
+	if(-e "/usr/sbin/suma"){
+		open(TMP, "/usr/sbin/suma -x -a Action=Preview -a RqType=Latest -a FilterSysFile=/dev/null|");
+		my $i=0;
+		while(<TMP>){
+			chomp($_);
+			my @items = split;
+			my $package;
+			if($items[1] eq "SKIPPED:"){
+				$package = $items[2];
+			} elsif($items[1] eq "SUCCEEDED:"){
+				my @ua = split("/", $items[2]);
+				my $uac = scalar(@ua);
+				$package = $ua[$uac-1];
+			}
+
+			if($package){
+				$packages[$i] = "$package;;;;";
+				$i++;
+			}
+		}
+	}
+	return @packages;
+}
+
+sub up2date(){
+	open(TMP, "/usr/sbin/up2date --list --nox|");	
+	my ($package, $ver, $rel);
+	my $i=0;
+	my @packages;
+		my $on;
+		while(<TMP>){
+			chomp($_);
+			if($_ eq "This system may not be updated until it is associated with a channel."){
+				# RHN no channel
+				printlog("RHN error: This node is not associated with a channel.");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;channel";
+				$i++;
+				last;
+			} 
+
+			if($_ eq "Error Class Code: 31"){
+				# RHN not entitiled
+				printlog("RHN error: This node does not have RHN entitlement");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;entitlement";
+				$i++;
+				last;
+			}
+
+			if($_ eq "Error Class Code: 9"){
+				# RHN Not registered
+				printlog("RHN Error: This node isn't registered with the Red Hat Network");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;register";
+				$i++;
+				last;
+			}
+
+
+			if($_ eq ""){
+				$on=0;
+			}
+
+			if($on eq 1){
+				my($package, $ver, $rel) = split;
+				$packages[$i] = "$package;;$ver;;$rel";
+				$i++;
+			}
+
+			if($_ eq "----------------------------------------------------------"){
+				$on=1;
+			}
+		}
+	close(TMP);
+	if($i eq 0 && $? eq 256){
+		# Something strange happened, probably error.
+		$packages[$i] = "exit;;error;other";
+		printlog("Exit error 256: No packages from $utool.");
+	}
+	printlog("Exit code: $?");
+	return @packages;
+	exit;
+}
+
+sub yum(){
+	# Tested with Fedora 7, CentOS 5, CentOS 4.4
+	open(TMP, "/usr/bin/yum check-update 2>&1|");
+	
+	my ($package, $ver, $rel);
+	my $i=0;
+	my @packages;
+	my $on=0;
+		while(<TMP>){
+			chomp($_);
+
+			if($_ eq "This system is not subscribed to any channels."){
+				# RHN no channel
+				printlog("RHN error: This node is not associated with a channel.");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;channel";
+				$i++;
+				last;
+			}
+
+			if($_ eq "Error Class Code: 31"){
+				# RHN not entitiled
+				undef(@packages);
+				$i=0;
+				printlog("RHN error: This node does not have RHN entitlement");
+				$packages[$i] = "rhn;;error;;entitlement";
+				$i++;
+				last;
+			}
+
+			if($_ eq "Error Class Code: 9"){
+				# RHN Not registered
+				printlog("RHN Error: This node isn't registered with the Red Hat Network");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;register";
+				$i++;
+				last;
+			}
+
+			if($on eq 1 && $_ eq " "){
+				$on=0;
+			}
+
+			if($on eq 1){
+				my ($packarch, $verrel, $packtype) = split;
+				my($package, $arch) = split("[.]", $packarch);
+				my($ver, $rel) = split("-", $verrel);
+				$packages[$i] = "$package;;$ver;;$rel;;$packtype";
+				$i++;
+			}
+
+			if($_ eq ""){
+				$on=1;
+			}
+		}
+	close(TMP);
+	return @packages;
+}
+
+sub printlog($){
+	my ($text) = @_;
+	print "$text\n" if $opt_d;
+}
+
+# If this is a Red Hat enterprise node we check if the node is
+# registered to RHN which is required if using up2date.
+# If this node is not registerd, we don't do the update check.
+sub rhn_regcheck(){
+	if(!-e "/etc/sysconfig/rhn/systemid"){
+		# Node not registerd
+		printlog("RHN Error: This node isn't registered with the Red Hat Network");
+		my @packages;
+		$packages[0] = "rhn;;error;;register";
+		write_out(@packages);
+		exit;
+	}
+}
+
+sub write_out(){
+	my @packages = @_;
+
+	if(!-e $spool){
+		printlog("Spool directory $spool does not exist. Create it.");
+		mkdir $spool, 0750;
+	}
+
+	my $count_packages = scalar(@packages);
+	printlog("Write out $count_packages to $spoolfile");
+	open(SPOOL, ">$spoolfile");
+	for(my $i=0; $i < $count_packages; $i++){
+		print SPOOL "$packages[$i]\n";
+	}
+	close(SPOOL);
+}
+
+sub apt_get(){
+	system("/usr/bin/apt-get update -qq");
+	open(U, "/usr/bin/apt-get --no-download --trivial-only -u upgrade 2>&1|");
+	my $on;
+	my @big_arr;
+	my $x=0;
+	my @packages;
+	while(<U>){
+		chomp($_);
+
+		my $c1 = substr($_, 0, 1);
+		my $c2 = substr($_, 1, 1);
+		$c1 = ord($c1);
+		$c2 = ord($c2);
+
+		if($_ eq "The following packages have been kept back:"){
+			$on=1;
+		} elsif($_ eq "The following packages will be upgraded:"){
+			$on=1;
+		} elsif($on eq 1 && ($c1 eq "32" && $c2 eq "32")){
+			$on=1;
+			my $list = substr($_, 2);
+			my @list_arr = split(" ", $list);
+			for(my $i=0; $i < scalar(@list_arr); $i++){
+				$packages[$x] = "$list_arr[$i]";
+				$x++;
+			}
+		} else {
+			$on=0;
+		}	
+	}
+	close(U);
+	return @packages;
+}
+
+sub rug(){
+	my @packages;
+	if(-e "/usr/bin/zypper"){
+		open(U, "/usr/bin/zypper list-updates 2>&1|");
+		my $i=0;
+		my $on=0;
+		while(<U>){
+			chomp($_);
+			my @line = split;
+			if($_ =~ "-----------------"){
+				$on=1;
+			} else {
+				if($on){
+					my @arr = split(/\|/, $_);
+					my $pack = $arr[1];
+					$pack =~ s/\s*$//g; # Strip whitespace
+					$pack =~ s/^\s*//g; # Strip whitespace
+                                
+					my $ver = $arr[2];
+					$ver =~ s/\s*$//g; # Strip whitespace
+					$ver =~ s/^\s*//g; # Strip whitespace
+                                
+	                                $packages[$i] = "$pack;;$ver;;";
+				}
+			}
+		}
+		close(U);
+		return @packages;
+	} elsif (-e "/usr/bin/rug") {
+		open(U, "/usr/bin/rug list-updates 2>&1|");
+		my $i=0;
+		my $on=0;
+		while(<U>){
+			chomp($_);
+			my @line = split;
+			my $pack = $line[5];
+			my $verrel = $line[7];
+			if($pack ne "" && $pack ne "|"){
+				$on=1;
+				my ($ver, $rel) = split("-", $verrel);
+				$packages[$i] = "$pack;;$ver;;$rel";
+				$i++;
+			} else {
+				$on=0;
+			}
+		}
+		close(U);
+		return @packages;
+	} else {
+		print "Unable to find updatetool\n";
+	}
+}
+
+
+main();

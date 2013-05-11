@@ -1,0 +1,19 @@
+# Sysvik - Cron
+# Version: 20081008-01
+
+# Sysvik
+# Server monitor service - www.sysvik.com
+*/5 * * * * root /usr/sbin/sysvik -b > /dev/null 2>&1
+
+# Sysvik-data monitor 
+*/15 * * * * root /usr/sbin/sysvik-check.sh > /dev/null 2>&1
+
+# Apwatch
+# Check every 3 hours if there are any OS updates and write to /var/spool/sysvik/updates.
+0 */3 * * * root /usr/sbin/apwatch > /dev/null 2>&1
+
+# For legacy/AIX cron:
+#0 0,6,12,18 * * * * /usr/sbin/apwatch > /dev/null 2>&1
+#0,15,30,45 * * * * /usr/sbin/sysvik -b > /dev/null 2>&1
+#1,16,31,46 * * * * /usr/sbin/sysvik-check.sh > /dev/null 2>&1
+

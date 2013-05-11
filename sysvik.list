@@ -1,0 +1,118 @@
+# Install listi v. sysvik.
+#
+# Þessi skrá notast við local dir skrár:
+# Dæmi:
+# f 600 root root /etc/init.d/sysvik sysvik.initrd <-- current dir skrá
+
+%version 3.2b11
+%release 1
+%product Sysvik
+%copyright GPLv2
+%vendor Opin Kerfi
+%description Agent for Sysvik system management service, www.sysvik.com. Sysvik monitors the system and reports to the Sysvik network about current status which can be seen in the central web application located at www.sysvik.com.
+%license LICENSE
+%requires perl
+
+f 750 root root /usr/sbin/sysvik sysvik
+f 750 root root /var/lib/sysvik/SVcore.pm lib/SVcore.pm
+f 750 root root /usr/sbin/sysvik-data sysvik-data
+f 750 root root /usr/sbin/apwatch apwatch
+f 755 root root /usr/share/man/man8/sysvik.8.gz sysvik.8.man.gz
+f 600 root root /etc/cron.d/sysvik sysvik.cron
+d 750 root root /etc/sysvik/custom.d
+d 750 root root /etc/sysvik/custom.d/examples
+d 750 root root /var/spool/sysvik
+d 750 root root /var/lib/sysvik
+f 755 root root /etc/init.d/sysvikd init.d/sysvikd
+f 755 root root /var/lib/sysvik/initrd-functions init.d/initrd-functions
+f 755 root root /usr/sbin/sysvik-check.sh sysvik-check.sh
+f 755 root root /etc/sysvik/custom.d/examples/files-tmp.sh custom.d/examples/files-tmp.sh
+f 755 root root /etc/sysvik/custom.d/examples/ipmi-power.pl custom.d/examples/ipmi-power.pl
+f 755 root root /etc/sysvik/custom.d/examples/ipmi-temp.pl custom.d/examples/ipmi-temp.pl
+f 755 root root /etc/sysvik/custom.d/examples/ps.sh custom.d/examples/ps.sh
+
+%preinstall <<EOF
+if [ -e /usr/sbin/aplog ]; then
+        /bin/rm -f /usr/sbin/aplog
+fi
+
+if [ -e /etc/cron.d/sysvik ]; then
+        /bin/rm -rf /etc/cron.d/sysvik
+
+	if [ -e /etc/init.d/crond ]; then
+		/etc/init.d/crond reload
+	fi
+
+	if [ -e /etc/init.d/cron ]; then
+		/etc/init.d/cron reload
+	fi
+fi
+
+if [ -e /etc/init.d/sysvikd ]; then
+        /etc/init.d/sysvikd stop
+fi
+EOF
+
+%postinstall <<EOF
+if [ -e /var/spool/sysvik/local.db ]; then
+	/bin/mv /var/spool/sysvik/local.db /var/lib/sysvik/local.db
+fi
+
+if [ -e /etc/sysvik/node.dat ]; then
+        /bin/chmod 750 /etc/sysvik/node.dat
+fi
+
+if [ -e /var/spool/sysvik/local.db ]; then
+        /bin/mv /var/spool/sysvik/local.db /var/lib/sysvik/local.db
+fi
+
+if [ -e /etc/init.d/crond ]; then
+	/etc/init.d/crond reload
+fi
+
+if [ -e /etc/init.d/cron ]; then
+	/etc/init.d/cron reload
+fi
+
+if [ ! -e /usr/sbin/aplog ]; then
+        /bin/ln -s /usr/sbin/sysvik /usr/sbin/aplog
+fi
+
+if [ ! -e /usr/sbin/sysvik-diary ]; then
+        /bin/ln -s /usr/sbin/sysvik /usr/sbin/sysvik-diary
+fi
+
+if [ -e /sbin/chkconfig ]; then
+        /sbin/chkconfig --add sysvikd
+fi
+
+if [ -e /etc/init.d/sysvikd ]; then
+        /etc/init.d/sysvikd start 
+fi
+
+if [ ! -e /etc/sysvik/node.dat ]; then
+	/bin/echo ""
+	/bin/echo "You need to register this node by typing \"sysvik -r\""
+fi
+EOF
+
+%preremove <<EOF
+	# If complete remove
+	if [ -e /etc/init.d/sysvikd ]; then
+	        /etc/init.d/sysvikd stop
+	fi
+
+	if [ -e /sbin/chkconfig ]; then
+	        /sbin/chkconfig --del sysvikd
+	fi
+EOF
+
+%postremove << EOF
+	if [ -e /etc/init.d/sysvikd ]; then
+	        /etc/init.d/sysvikd start
+
+		if [ -e /sbin/chkconfig ]; then
+		        /sbin/chkconfig --add sysvikd
+		fi
+	fi
+EOF

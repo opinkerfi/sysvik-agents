@@ -1,0 +1,26 @@
+Sysvik: 
+
+This package is meant for non .rpm and .deb OS. We offer packages for Rhel, Fedora, SuSE, Centos and other .rpm based distros and 
+Debian, Ubuntu and other .deb based distros. Please use them instead of this package.
+
+This package is meant for other distros like AIX and Slackware.
+
+1. Installation
+
+  - Uncompress and unpack with tar/gunzip ex: gunzip sysvik-version.tar.gz and tar -xvf sysvik-version.tar
+  - Run install.sh as root
+
+2. Registering (Only for fresh install)
+  - Run sysvik -r to register this node to sysvik
+
+3. Install to cron
+  - Install.sh will try to install sysvik to cron. If that fails you will need to do it manually. Look at the sysvik.cron file and
+    install it to the cron.d or add the information to "crontab -e". Please consult to your distros manuals for how the cron works.
+
+4. Startup scripts
+  - We need to startup one service, sysvik-data. Sysvik offers startup script that will work in most linux distros. Look at 
+    init.d/sysvikd. 
+  - You can also add the following line to your rc.local file:
+    /usr/sbin/sysvik-data -b -q
+  - Please run this service after insallation and kill/execute after upgrade.
+
