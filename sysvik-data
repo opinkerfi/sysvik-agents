@@ -33,7 +33,7 @@ use POSIX;
 our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_q);
 getopts('dvhbq');
 
-my $version = "3.2";
+my $version = "3.2r1";
 
 my $sv = SVcore->new(debug => $opt_d, local_db => $local_db);
 

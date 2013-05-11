@@ -4,7 +4,7 @@
 # Dæmi:
 # f 600 root root /etc/init.d/sysvik sysvik.initrd <-- current dir skrá
 
-%version 3.2b11
+%version 3.2r1
 %release 1
 %product Sysvik
 %copyright GPLv2
