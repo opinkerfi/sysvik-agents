@@ -60,8 +60,8 @@ use POSIX;
 use lib qw(/var/lib/sysvik);
 use SVcore;
 use Getopt::Std;
-our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_e, $opt_r, $opt_s, $opt_l, $opt_g);
-getopts('bdvhc:erlsg:');
+our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_e, $opt_r, $opt_s, $opt_l, $opt_g, $opt_m);
+getopts('bdvhc:erlsg:m:');
 
 my $basekey; # Global variable
 my $socket;
@@ -1638,58 +1638,72 @@ sub hr2kb ($){
 #	This function gets input from user (initials and text) and
 #	send to sysvik network
 sub diary(){
-	print "======== Sysvik diary ========\n\n";
-	print "# Central system diary. \n";
-	print "# Here you can log changes you make on the system, for example reboots, changes in files etc.\n\n";
+	my $msg_input;
+	my @msg;
+	if($opt_m){
+		$msg_input = $opt_m;
+	} else {
+		print "======== Sysvik diary ========\n\n";
+		print "# Central system diary. \n";
+		print "# Here you can log changes you make on the system, for example reboots, changes in files etc.\n\n";
+	}
+
+	my $LANG = $ENV{LANG};
+
 	print "Your initials/name: ";
 	my $initials = <STDIN>;
 	chomp($initials);
 
-	my $tmpfile = "/tmp/sysdiary-$$.dat";
-	my $editor = $ENV{'EDITOR'};
-	if(!$editor){
-		if(-e "/usr/bin/pico"){
-			$editor = "/usr/bin/pico";
-		} elsif (-e "/usr/bin/nano"){
-			$editor = "/usr/bin/nano";
-		} 
+	if(!$opt_m){
+		my $tmpfile = "/tmp/sysdiary-$$.dat";
+		my $editor = $ENV{'EDITOR'};
+		if(!$editor){
+			if(-e "/usr/bin/pico"){
+				$editor = "/usr/bin/pico";
+			} elsif (-e "/usr/bin/nano"){
+				$editor = "/usr/bin/nano";
+			} 
+		}
+
+		system("$editor $tmpfile");
+
+		if(-e $tmpfile){
+			# File exist, lets read it and send to the sysvik server
+			open(FILE, "$tmpfile");
+			my $i=0;
+			while(<FILE>){
+				chomp($_);
+				my $line = qp_encode($_);
+				$msg[$i] = "$line";
+				$i++;
+			}
+			close(FILE);
+		} else {
+			print "Description missing\n";
+			exit;
+		}
 	}
 
-	system("$editor $tmpfile");
 
-	if(-e $tmpfile){
-		# File exist, lets read it and send to the sysvik server
-		open(FILE, "$tmpfile");
-		my @msg;
-		my $i=0;
-		while(<FILE>){
-			chomp($_);
-			my $line = qp_encode($_);
-			$msg[$i] = "$line";
-			$i++;
-		}
-		close(FILE);
-
-		my $LANG = $ENV{LANG};
-		($socket, $basekey) = $sv->sysvik_connect($servername, $port, $proto_version) if !$opt_e; # Connect to sysvik
-		$sv->node_login($basekey, $hostkey1, $hostkey2, $agent, $agent_version, $proto_version) if !$opt_e; # Login the node
-		my $resp = socket_trans("diary open $initials;;$LANG");
-		my @resp = split(" ", $resp);
-		if($resp[0] eq 341){
+	($socket, $basekey) = $sv->sysvik_connect($servername, $port, $proto_version) if !$opt_e; # Connect to sysvik
+	$sv->node_login($basekey, $hostkey1, $hostkey2, $agent, $agent_version, $proto_version) if !$opt_e; # Login the node
+	my $resp = socket_trans("diary open $initials;;$LANG");
+	my @resp = split(" ", $resp);
+	if($resp[0] eq 341){
+		if($opt_m){
+			my $resp = socket_trans("diary insert $msg_input");
+		} else {
 			# Continue
 			for(my $i=0; $i < scalar(@msg); $i++){
 				my $resp = socket_trans("diary insert $msg[$i]");
 			}
-			my $resp = socket_trans("diary close");
-			if($resp =~ "343"){
-				print "Log entry successful\n";
-			} else {
-				print "Log entry failed\n";
-			}
 		}
-	} else {
-		print "Description missing\n";
-		exit;
+		my $resp = socket_trans("diary close");
+		if($resp =~ "343"){
+			print "Log entry successful\n";
+		} else {
+			print "Log entry failed\n";
+		}
 	}
 }
 
@@ -1715,7 +1729,7 @@ write(HEAD);
 				my ($hostname, $lastseen, $os_type, $osid, $client_version, $comment) = split(";;", $_);
 				format = 
 @<<<<<<<<<<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<< @<<<<<<<<<<<<<<  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-$hostname $lastseen $os_type $client_version $comment
+$hostname, $lastseen, $os_type, $client_version, $comment
 .
 write;
 			}
@@ -1780,16 +1794,19 @@ if($prog eq "sysvik-diary" || $prog eq "aplog"){
 if($opt_h || (!$opt_b && !$opt_v && !$opt_e && !$opt_l && !$opt_r && !$opt_g)){
 	print "sysvik [OPTIONS] ...\n\n";
 	print "Optional options:\n";
+	print "  -h\tPrints this text\n";
+	print "  -v\tPrints version information\n";
 	print "  -b\tCollect data and send to Sysvik\n";
 	print "  -d\tDebug mode\n";
 	print "  -e\tDon't connect to Sysvik (for debugging)\n";
-	print "  -l\tDiary mode\n";
 	print "  -g\tGet info\n";
 	print "\t\tnodes\tGet list of nodes in account\n";
 	print "  -r\tRegister node\n";
 	print "  -s\tRescan hardware\n";
-	print "  -h\tPrints this text\n";
-	print "  -v\tPrints version information\n";
+	print "\n";
+	print " Diary\n";
+	print "\t  -l\tDiary mode\n";
+	print "\t  -m\tMessage\n";
 	exit;
 } elsif ($opt_v){
 	print "sysvik $agent_version\n";
