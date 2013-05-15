@@ -63,14 +63,17 @@ sub seekstr($$){
 
 	my $file = $self->{local_db};
 
-	if(-e $file){
+	if(!-e $file){
+		$self->printlog("Unable to open $file");
+	} else {
 		my $ret = "";
 		open(DATA, $file);
 			while(<DATA>){
 				chomp($_);
-				split(";;", $_, 2);
-				if($_[0] eq $var){
-					$ret = return $_[1];
+				my @arr = split(";;", $_, 2);
+
+				if($arr[0] eq $var){
+					$ret = return $arr[1];
 				}
 			}
 		close(DATA);
