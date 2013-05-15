@@ -1716,20 +1716,27 @@ sub get($){
 	if($cmd eq "nodes"){
 	# List all nodes in this account
 format HEAD =
-Hostname                        Last seen              OS Type         Version         Comment
+Hostname                        Last seen              OS Type   OS             Version         ipv4             Comment
 ===========================================================================================================================
 .
 write(HEAD);
-		print $socket "get $opt_g\r\n";
+		my $query = "get $opt_g";
+		$sv->printlog("SOCKET SEND: $query");
+		print $socket "$query\r\n";
 		while(<$socket>){
 			chomp($_);
+			$sv->printlog("SOCKET RESPOND: $_");
 			if($_ =~ "110"){
 				last;
 			} else {
-				my ($hostname, $lastseen, $os_type, $osid, $client_version, $comment) = split(";;", $_);
+				my ($hostname, $lastseen, $os_type, $osid, $client_version, $comment, $loadavg, $ipv4, $os, $lastseen_ut, $server_time) = split(";;", $_);
+				$os_type = ucfirst($os_type);
+
+				my $ago = ut2ago($lastseen_ut, $server_time);
+
 				format = 
-@<<<<<<<<<<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<< @<<<<<<<<<<<<<<  @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-$hostname, $lastseen, $os_type, $client_version, $comment
+@<<<<<<<<<<<<<<<<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<    @<<<<<<<< @<<<<<<<<<<<<< @<<<<<<<<<<<<<< @<<<<<<<<<<<<<<    @<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+$hostname, $ago, $os_type, $os, $client_version, $ipv4, $comment
 .
 write;
 			}
@@ -1779,6 +1786,28 @@ sub qp_encode ($;$){
 	return $res;
 }
 
+sub ut2ago($$){
+	my ($ut, $server_time) = @_;
+
+	my $diff = $server_time - $ut;
+
+	if($diff > 31536000){
+		# Over a year ago
+		return int($diff/31536000)." year(s) ago";
+	} elsif ($diff > 86399){
+		# Over a day ago
+		return int($diff/86400)." day(s) ago";
+	} elsif($diff > 3599){
+		# Over a hour ago
+		return int($diff/3600)." hour(s) ago";
+	} elsif($diff > 59){
+		return int($diff/60). " min(s) ago";
+	} elsif($diff > 0){
+		return $diff. " sec(s) ago";
+	} else {
+		return "now";
+	}
+}
 
 ################# MAIN
 my $progf = $0; # Name of the program called
