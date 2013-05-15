@@ -1,6 +1,6 @@
 #!/usr/bin/perl
 #
-#    Copyright (C) 1999-2013 Tryggvi Farestveit <tryggvi@linux.is>
+#    Copyright (C) 1999-2008 Tryggvi Farestveit
 #
 #   This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -32,7 +32,7 @@ my $logfile = "/var/log/sysvik.log";
 my $agent = "sysvik"; 
 
 # Agent version
-my $version = "3.2r1";
+my $agent_version = "3.2r2";
 
 # Protocol version
 my $proto_version = "3.2";
@@ -60,8 +60,8 @@ use POSIX;
 use lib qw(/var/lib/sysvik);
 use SVcore;
 use Getopt::Std;
-our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_e, $opt_r, $opt_s, $opt_l, $opt_g, $opt_m);
-getopts('bdvhc:erlsg:m:');
+our ($opt_d, $opt_v, $opt_h, $opt_b, $opt_e, $opt_r, $opt_s, $opt_l, $opt_g, $opt_u, $opt_p, $opt_a, $opt_i, $opt_m);
+getopts('g:ibdvhc:erlsu:p:a:');
 
 my $basekey; # Global variable
 my $socket;
@@ -69,27 +69,111 @@ my ($hostkey1, $hostkey2);
 
 my $sv = SVcore->new( logfile => $logfile, debug => $opt_d, noconnect => $opt_e, local_db => $local_db);
 
-my $agent_version = $version;
 ################# subroutines
-# basic_info()
-#	Gets basic information about this node
-sub basic_info(){
-	## Node type
+# Collect and print out system information
+sub SystemInformation(){
 	my $os_type = $sv->DetectOS();
+
+#tkf
+	### System summary
+	my ($os, $kernel_version) = getOperatingSystem();
+
+	print "System summary:\n\n";
+	print "Platform type: $os_type\n";
+	print "Operating system: $os\n";
+	print "Kernel version: $kernel_version\n";
+
+	print "\n";
 	
+	
+	### Get hardware inventory
+	print "Hardare information:\n\n";
+	my($hw_manuf, $hw_product, $hw_serial, $hw_chasstype, $hw_mem_max, $hw_mem_devices, $raw) = InventoryMain($os_type);
+	print "Manufacturer: $hw_manuf\n";
+	print "Product: $hw_product\n";
+	print "Serial: $hw_serial\n";
+	print "Chassis type: $hw_chasstype\n";
+	print "Max Memory: ".int($hw_mem_max/1024)." MB\n";
+	print "Memory devices: $hw_mem_devices\n";
+	print "\n";
+
+	print "Memory information:\n\n";
+	### Get memory inventory ###
+	my ($mem_index, @mem_items) = InventoryMemory($os_type, $raw);
+
+format HEAD2 = 
+Memory        Memory      Total      Data     Speed        Serial number    Part number
+Size          Locator     Width      Width
+=============================================================================================
+.
+$~ = "HEAD2";
+write(HEAD2);
+
+	for(my $i=0; $i < scalar(@mem_items); $i++){
+		my ($mem_size, $mem_locator, $mem_total_width, $mem_data_width, $mem_set, $mem_form_factor, $mem_speed, $mem_type, $mem_serial, $mem_partnumber) = split(";;", $mem_items[$i]);
+		if(!$mem_size){
+			$mem_size = "Empty";
+		} else {
+			$mem_size = int($mem_size/1024)." MB";
+		}
+
+		if($mem_speed eq "Unknown"){
+			$mem_speed = "";
+		}
+
+format BODY2 = 
+@<<<<<<<<<<<  @<<<<<<<<<  @<<<<<<    @<<<<<<<  @<<<<<<<<<< @<<<<<<<<<<<<<   @<<<<<<<<<<<
+$mem_size, $mem_locator, $mem_total_width, $mem_data_width, $mem_speed, $mem_serial, $mem_partnumber
+.
+$~ = "BODY2";
+		write;
+	}	
+
+	my ($NumberOfLogicalCPU, $CurrentClockSpeed, $Model, $L2Cache, $L3Cache, $NumberOfCores, $NumberOfPhysicalCPU, $MaxClockSpeed) = getProcessors($os_type);
+
+	print "\n";
+	print "CPU information:\n\n";
+	print "Model: $Model\n";
+	print "Logical CPUs: $NumberOfLogicalCPU\n";
+	if($NumberOfCores){
+		print "Number of Cores: $NumberOfCores\n";
+	}
+
+	if($NumberOfPhysicalCPU){
+		print "Number of Physical CPU: $NumberOfPhysicalCPU\n";	
+	}
+	print "Current Clock speed: $CurrentClockSpeed\n";
+	print "Max Clock Speed: $MaxClockSpeed\n";
+	print "L2 Cache: $L2Cache\n";
+	if($L3Cache){
+		print "L3 Cache: $L3Cache\n";
+	}
+}
+
+sub getOperatingSystem(){
+	my $os_type = $sv->DetectOS();
+
 	## Operating system information
 	my $os;
-	my $kernel_version_aix;
+	my $kernel_version;
 	if($os_type eq "aix"){
 		if(-e "/usr/bin/oslevel"){
 			open(U, "/usr/bin/oslevel|");
 			$os = <U>;
 			chomp($os);
-			$kernel_version_aix = $os;
+			$kernel_version = $os;
 			$os = "AIX ".lc($os);
 			close(U);
 		}
 	} elsif ($os_type eq "linux"){
+		# Kernel version
+		if(-e "/proc/sys/kernel/osrelease"){
+			open(KV, "/proc/sys/kernel/osrelease");
+			$kernel_version = <KV>;
+       		        chomp($kernel_version);
+	               	close(KV);
+		}
+
 		# Red Hat
 		if(-e "/etc/redhat-release"){
 			# Red Hat Linux/Enterprise/Fedora
@@ -134,14 +218,40 @@ sub basic_info(){
 				$os =~ s/\s+$//;
 			close(TMP);
 		}
+	}
 
-		# Difference compare - OS
-		my $oos = $sv->seekstr("os");
-		if($oos ne $os && $oos){
-			$sv->printlog("OS change: $oos to $os");
-			my $resp = socket_trans("send syschange os;;$oos;;$os");
+	return ($os, $kernel_version);
+}
+
+# basic_info()
+#	Gets basic information about this node
+sub basic_info(){
+	## Node type
+	my $os_type = $sv->DetectOS();
+
+	# OS
+	my ($os, $kernel_version) = getOperatingSystem();
+
+	# Difference compare - OS
+	my $oos = $sv->seekstr("os");
+	if($oos ne $os && $oos){
+		$sv->printlog("OS change: $oos to $os");
+		my $resp = socket_trans("send syschange os;;$oos;;$os");
+	}
+
+	$sv->putstr("os", $os);	
+
+	# Kernel
+	### Kernel version ###
+	# Difference compare - kernel version
+	my $okernel_version = $sv->seekstr("kernel_version");
+
+	if($os_type eq "linux"){
+		if($okernel_version ne $kernel_version && $okernel_version){
+			$sv->printlog("kernel change: $okernel_version to $kernel_version");
+			my $resp = socket_trans("send syschange kernel_version;;$okernel_version;;$kernel_version");
 		}
-		$sv->putstr("os", $os);
+		$sv->putstr("kernel_version", $kernel_version);
 	}
 
 	## Uptime
@@ -184,7 +294,7 @@ sub basic_info(){
 	my $ohostname = $sv->seekstr("hostname");
 	if($ohostname ne $node_hostname && $ohostname){
 		$sv->printlog("hostname change: $ohostname to $node_hostname");
-		my $resp = socket_trans("send syschange hostname;;$ohostname;;$node_hostname");
+ 		my $resp = socket_trans("send syschange hostname;;$ohostname;;$node_hostname");
 	}
 	$sv->putstr("hostname", $node_hostname);
 
@@ -201,27 +311,6 @@ sub basic_info(){
 		my $resp = socket_trans("send domain $node_domain");
 	}
 	$sv->putstr("domain", $node_domain);
-
-	### Kernel version ###
-	# Difference compare - kernel version
-	my $kernel_version;
-	my $okernel_version = $sv->seekstr("kernel_version");
-	if($os_type eq "aix"){
-		$kernel_version = $kernel_version_aix;
-	} else {
-		if(-e "/proc/sys/kernel/osrelease"){
-			open(KV, "/proc/sys/kernel/osrelease");
-			$kernel_version = <KV>;
-        	        chomp($kernel_version);
-                	close(KV);
-		}
-
-		if($okernel_version ne $kernel_version && $okernel_version){
-			$sv->printlog("kernel change: $okernel_version to $kernel_version");
-			my $resp = socket_trans("send syschange kernel_version;;$okernel_version;;$kernel_version");
-		}
-		$sv->putstr("kernel_version", $kernel_version);
-	}
 
 	my $agent_str = "$agent $agent_version";
 
@@ -301,6 +390,8 @@ sub getProcessors($){
 	my $NumberOfPhysicalCPU = 0;
 	my $MaxClockSpeed = 0;
 
+	my %physicalID;
+	my %coreID;
 	if($os_type eq "linux"){
 		open(CPU, "/proc/cpuinfo");
 			while(<CPU>){
@@ -323,7 +414,17 @@ sub getProcessors($){
 				} elsif ($xvar eq "cache size"){
 					$L2Cache = $xval;
 					$L2Cache =~ s/ KB//; # Take out KB part
-				} 
+				} elsif ($xvar eq "physical id"){
+					if(!$physicalID{$xval}){
+						$NumberOfPhysicalCPU++;
+						$physicalID{$xval}=1;
+					}
+				} elsif($xvar eq "core id"){
+					if(!$coreID{$xval}){
+						$NumberOfCores++;
+						$coreID{$xval}=1;
+					}
+				}
 			}
 		close(CPU);
 	} elsif ($os_type eq "aix"){
@@ -1022,11 +1123,12 @@ sub InventoryMain($){
 				$_ =~ s/\s+$//;
 				$_ =~ s/^\s+//;
 
+				my @line = split;
+
 				# Lets keep the last handle if we need it later
 				if($_ =~ "Handle "){
-					split;
-					$_[1] =~ s/,+//;
-					$handle = $_[1];
+					$line[1] =~ s/,+//;
+					$handle = $line[1];
 				}
 
 				# Empty line if we are ON we exit.
@@ -1049,46 +1151,39 @@ sub InventoryMain($){
 				}
 
 				# ON inspect
+				my ($l_var, $l_val) = split(": ", $_, 2);
 				if($on eq "sysinfo"){
-					if($_ =~ "Manufacturer:"){
+					if($l_var eq "Manufacturer"){
 						# Information about the manufacturer
-						split(": ", $_, 2);
-						$hw_manuf = $_[1];
-					} elsif ($_ =~ "Product Name:"){
+						$hw_manuf = $l_val;
+					} elsif ($l_var eq "Product Name"){
 						# Information about the product
-						split(": ", $_, 2);
-						$hw_product = $_[1];
-					} elsif ($_ =~ "Serial Number:"){
+						$hw_product = $l_val;
+					} elsif ($l_var eq "Serial Number"){
 						# Manufacturer serial number of this node
-						split(": ", $_, 2);
-						$hw_serial = $_[1];
+						$hw_serial = $l_val;
 					}
 				} elsif ($on eq "sysinfo-x1"){
 					# Older sysinfo
-					if($_ =~ "Vendor: "){
+					if($l_var eq "Vendor"){
 						# Information about the manufacturer
-						split(": ", $_, 2);
-						$hw_manuf = $_[1];
-					} elsif ($_ =~ "Product: "){
+						$hw_manuf = $l_val;
+					} elsif ($l_var eq "Produc"){
 						# Information about the product name
-						split(": ", $_, 2);
-						$hw_product = $_[1];
-					} elsif ($_=~ "Version: "){
+						$hw_product = $l_val;
+					} elsif ($l_var eq "Version"){
 						# Information about the product version
-						split(": ", $_, 2);
-						$hw_product = "$hw_product $_[1]";
+						$hw_product = "$hw_product $l_val";
 					}
 				} elsif ($on eq "chassis"){
-					if($_ =~ "Type:"){
+					if($l_var eq "Type"){
 						# Chassis type exp. rack mount etc.
-						split(": ", $_, 2);
-						$hw_chasstype = $_[1];
+						$hw_chasstype = $l_val;
 					}
 				} elsif ($on eq "chassis-x1"){
-					if($_ =~ "Chassis Type: "){
+					if($l_var eq "Chassis Type"){
 						# Chassis type exp. rack mount etc.
-						split(": ", $_, 2);
-						$hw_chasstype = $_[1];
+						$hw_chasstype = $l_val;
 					}
 				} elsif ($on eq "memory_array"){
 					if($_ =~ "Use: System Memory"){
@@ -1096,12 +1191,10 @@ sub InventoryMain($){
 					}
 				} elsif ($on eq "memory_array_system"){
 					$hw_mem_handle = $handle;
-					if($_ =~ "Maximum Capacity: "){
-						split(": ", $_, 2);
-						$hw_mem_max = hr2kb($_[1]);
-					} elsif ($_ =~ "Number Of Devices: "){
-						split(": ", $_, 2);
-						$hw_mem_devices = $_[1];
+					if($l_var eq "Maximum Capacity"){
+						$hw_mem_max = hr2kb($l_val);
+					} elsif ($_ =~ "Number Of Devices"){
+						$hw_mem_devices = $l_val;
 					}
 				}
 			}
@@ -1437,65 +1530,79 @@ sub node_register(){
 	# Registration part 1
 	# Connection to sysvik network, log user in and get list of accounts that the user has access to.
 
-	print "======== Sysvik register ========\n\n";
-	print "Please provide your Sysvik network username and password.\n";
-	print "You can create free account at www.sysvik.com.\n\n";
-	print "Enter your Sysvik username: ";
-	my $username = <STDIN>;
-	chomp($username);
-
-	print "Enter your Sysvik password: ";
-	system("stty -echo");
-	my $password = <STDIN>;
-	chomp($password);
-	system("stty echo");
-	print  "\n";
-
-	my $xcode = user_login($username, $password);
-	
+	my ($username, $password);
 	my @accounts;
 	my $account_val;
-	if($xcode eq 1){
-		# Login success
 
-		# Get list of accounts
-		print $socket "list_accounts\r\n";
+	if(!$opt_u && !$opt_p){
+		print "======== Sysvik register ========\n\n";
+		print "Please provide your Sysvik network username and password.\n";
+		print "You can create free account at www.sysvik.com.\n\n";
+		print "Enter your Sysvik username: ";
+		$username = <STDIN>;
+		chomp($username);
 
-		my $i=0;
-		while(<$socket>){
-			if($_ =~ "110"){
-				last; # No more entries
-			} else {
-				$accounts[$i] = $_;
-				$i++;
+		print "Enter your Sysvik password: ";
+		system("stty -echo");
+		$password = <STDIN>;
+		chomp($password);
+		system("stty echo");
+		print  "\n";
+
+		my $xcode = user_login($username, $password);
+	
+		if($xcode eq 1){
+			# Login success
+	
+			# Get list of accounts
+			print $socket "list_accounts\r\n";
+
+			my $i=0;
+			while(<$socket>){
+				if($_ =~ "110"){
+					last; # No more entries
+				} else {
+					$accounts[$i] = $_;
+					$i++;
+				}
 			}
-		}
-		# Close connection
-		$sv->sysvik_disconnect();
+			# Close connection
+			$sv->sysvik_disconnect();
 
-		print "\nPlease select the account this node will belong to: \n";
-		for(my $i=0; $i < scalar(@accounts); $i++){
-			my ($account_id, $account_title, $account_company, $account_type) = split(";;", $accounts[$i]);
-			print "\t$i. $account_title\n";
-		}
-		print "Choose account [0]: ";
-		$account_val = <STDIN>;
-		if($account_val eq ""){
-			$account_val = 0;
-		}		
-	} 
-	undef($xcode);
+			print "\nPlease select the account this node will belong to: \n";
+			for(my $i=0; $i < scalar(@accounts); $i++){
+				my ($account_id, $account_title, $account_company, $account_type) = split(";;", $accounts[$i]);
+				print "\t$i. $account_title\n";
+			}
+			print "Choose account [0]: ";
+			$account_val = <STDIN>;
+			if($account_val eq ""){
+				$account_val = 0;
+			}		
+		} 
+		undef($xcode);
+	} else {
+		$username = $opt_u;
+		$password = $opt_p;
+	}
 
 	# Registration part 2
 	# Connecting again to the sysvik network, logging in and registering the node itself to the account the user
 	# choose above.
 
 	($socket, $basekey) = $sv->sysvik_connect($servername, $port, $proto_version);
-	$xcode = user_login($username, $password);
+	my $xcode = user_login($username, $password);
 	my ($hostkey1, $hostkey2);
 	if($xcode eq 1){
 		my ($node_hostname, $node_domain) = get_hostdomain(); # Returns hostname and domainname
-		my($account_id, $account_title, $account_company, $account_type) = split(";;", $accounts[$account_val]);
+
+		my($account_id, $account_title, $account_company, $account_type);
+                if($opt_u && $opt_p && $opt_a){
+                        $account_id = $opt_a;
+                } else {
+                        ($account_id, $account_title, $account_company, $account_type) = split(";;", $accounts[$account_val]);
+                }
+
 		if($account_id eq ""){
 			print "Error: Invalid account\n";
 			$sv->sysvik_disconnect();
@@ -1670,6 +1777,7 @@ sub diary(){
 		if(-e $tmpfile){
 			# File exist, lets read it and send to the sysvik server
 			open(FILE, "$tmpfile");
+			my @msg;
 			my $i=0;
 			while(<FILE>){
 				chomp($_);
@@ -1682,28 +1790,30 @@ sub diary(){
 			print "Description missing\n";
 			exit;
 		}
-	}
 
-
-	($socket, $basekey) = $sv->sysvik_connect($servername, $port, $proto_version) if !$opt_e; # Connect to sysvik
-	$sv->node_login($basekey, $hostkey1, $hostkey2, $agent, $agent_version, $proto_version) if !$opt_e; # Login the node
-	my $resp = socket_trans("diary open $initials;;$LANG");
-	my @resp = split(" ", $resp);
-	if($resp[0] eq 341){
-		if($opt_m){
-			my $resp = socket_trans("diary insert $msg_input");
-		} else {
-			# Continue
-			for(my $i=0; $i < scalar(@msg); $i++){
-				my $resp = socket_trans("diary insert $msg[$i]");
+		($socket, $basekey) = $sv->sysvik_connect($servername, $port, $proto_version) if !$opt_e; # Connect to sysvik
+		$sv->node_login($basekey, $hostkey1, $hostkey2, $agent, $agent_version, $proto_version) if !$opt_e; # Login the node
+		my $resp = socket_trans("diary open $initials;;$LANG");
+		my @resp = split(" ", $resp);
+		if($resp[0] eq 341){
+			if($opt_m){
+				my $resp = socket_trans("diary insert $msg_input");
+			} else {
+				# Continue
+				for(my $i=0; $i < scalar(@msg); $i++){
+					my $resp = socket_trans("diary insert $msg[$i]");
+				}
+			}
+			my $resp = socket_trans("diary close");
+			if($resp =~ "343"){
+				print "Log entry successful\n";
+			} else {
+				print "Log entry failed\n";
 			}
 		}
-		my $resp = socket_trans("diary close");
-		if($resp =~ "343"){
-			print "Log entry successful\n";
-		} else {
-			print "Log entry failed\n";
-		}
+	} else {
+		print "Description missing\n";
+		exit;
 	}
 }
 
@@ -1720,18 +1830,17 @@ Hostname                        Last seen              OS Type   OS             
 ===========================================================================================================================
 .
 write(HEAD);
+
 		my $query = "get $opt_g";
 		$sv->printlog("SOCKET SEND: $query");
 		print $socket "$query\r\n";
 		while(<$socket>){
 			chomp($_);
-			$sv->printlog("SOCKET RESPOND: $_");
 			if($_ =~ "110"){
 				last;
 			} else {
 				my ($hostname, $lastseen, $os_type, $osid, $client_version, $comment, $loadavg, $ipv4, $os, $lastseen_ut, $server_time) = split(";;", $_);
 				$os_type = ucfirst($os_type);
-
 				my $ago = ut2ago($lastseen_ut, $server_time);
 
 				format = 
@@ -1741,6 +1850,29 @@ $hostname, $ago, $os_type, $os, $client_version, $ipv4, $comment
 write;
 			}
 		}
+	}
+}
+
+sub ut2ago($$){
+	my ($ut, $server_time) = @_;
+
+	my $diff = $server_time - $ut;
+
+	if($diff > 31536000){
+		# Over a year ago
+		return int($diff/31536000)." year(s) ago";
+	} elsif ($diff > 86399){
+		# Over a day ago
+		return int($diff/86400)." day(s) ago";
+	} elsif($diff > 3599){
+		# Over a hour ago
+		return int($diff/3600)." hour(s) ago";
+	} elsif($diff > 59){
+		return int($diff/60). " min(s) ago";
+	} elsif($diff > 0){
+		return $diff. " sec(s) ago";
+	} else {
+		return "now";
 	}
 }
 
@@ -1786,28 +1918,6 @@ sub qp_encode ($;$){
 	return $res;
 }
 
-sub ut2ago($$){
-	my ($ut, $server_time) = @_;
-
-	my $diff = $server_time - $ut;
-
-	if($diff > 31536000){
-		# Over a year ago
-		return int($diff/31536000)." year(s) ago";
-	} elsif ($diff > 86399){
-		# Over a day ago
-		return int($diff/86400)." day(s) ago";
-	} elsif($diff > 3599){
-		# Over a hour ago
-		return int($diff/3600)." hour(s) ago";
-	} elsif($diff > 59){
-		return int($diff/60). " min(s) ago";
-	} elsif($diff > 0){
-		return $diff. " sec(s) ago";
-	} else {
-		return "now";
-	}
-}
 
 ################# MAIN
 my $progf = $0; # Name of the program called
@@ -1820,27 +1930,38 @@ if($prog eq "sysvik-diary" || $prog eq "aplog"){
 	$opt_l = 1;
 }
 
-if($opt_h || (!$opt_b && !$opt_v && !$opt_e && !$opt_l && !$opt_r && !$opt_g)){
+if($opt_h || (!$opt_b && !$opt_v && !$opt_e && !$opt_l && !$opt_r && !$opt_g && !$opt_i)){
 	print "sysvik [OPTIONS] ...\n\n";
 	print "Optional options:\n";
-	print "  -h\tPrints this text\n";
-	print "  -v\tPrints version information\n";
+	print "  -i\tPrint out system information\n";
 	print "  -b\tCollect data and send to Sysvik\n";
 	print "  -d\tDebug mode\n";
 	print "  -e\tDon't connect to Sysvik (for debugging)\n";
+	print "  -l\tDiary mode\n";
+	print "\t\t-m\tUse the given <msg> as diary entry\n";
 	print "  -g\tGet info\n";
+
 	print "\t\tnodes\tGet list of nodes in account\n";
 	print "  -r\tRegister node\n";
+	print "\tOptional register options\n";
+	print "\t\t-a [id] Account ID\n";
+	print "\t\t-u [username] Username\n";
+	print "\t\t-p [password] Password\n";
 	print "  -s\tRescan hardware\n";
-	print "\n";
-	print " Diary\n";
-	print "\t  -l\tDiary mode\n";
-	print "\t  -m\tMessage\n";
+	print "  -h\tPrints this text\n";
+	print "  -v\tPrints version information\n";
 	exit;
 } elsif ($opt_v){
 	print "sysvik $agent_version\n";
 	exit;
 }
+
+if($opt_i){
+	# System information is independant and will exit when finished.
+
+	SystemInformation();
+	exit;
+} 
 
 if (!-e $nodefile && !$opt_r){
 	my $nodefile_sleep = $sv->seekstr("nodefile_error_sleep");
@@ -1893,3 +2014,5 @@ if($opt_l){
 	$sv->sysvik_disconnect();
 	$sv->lock_off($lock);
 }
+
+
