@@ -1,0 +1,12 @@
+[Unit]
+Description=Sysvik data processing
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/sysvik-data -d
+PIDFile=/var/run/sysvik.pid
+
+[Install]
+WantedBy=multi-user.target
+
+

@@ -23,7 +23,8 @@ d 750 root root /etc/sysvik/custom.d
 d 750 root root /etc/sysvik/custom.d/examples
 d 750 root root /var/spool/sysvik
 d 750 root root /var/lib/sysvik
-f 755 root root /etc/init.d/sysvikd init.d/sysvikd
+f 755 root root /var/lib/sysvik/sysvikd init.d/sysvikd
+f 755 root root /var/lib/sysvik/sysvik-data.service systemd/sysvik-data.service
 f 755 root root /var/lib/sysvik/initrd-functions init.d/initrd-functions
 f 755 root root /usr/sbin/sysvik-check.sh sysvik-check.sh
 f 755 root root /etc/sysvik/custom.d/examples/files-tmp.sh custom.d/examples/files-tmp.sh
@@ -51,6 +52,12 @@ fi
 if [ -e /etc/init.d/sysvikd ]; then
         /etc/init.d/sysvikd stop
 fi
+
+if [ -e /usr/bin/systemctl ]; then
+	systemctl stop sysvik-data
+fi
+
+
 EOF
 
 %postinstall <<EOF
@@ -82,37 +89,56 @@ if [ ! -e /usr/sbin/sysvik-diary ]; then
         /bin/ln -s /usr/sbin/sysvik /usr/sbin/sysvik-diary
 fi
 
-if [ -e /sbin/chkconfig ]; then
-        /sbin/chkconfig --add sysvikd
-fi
-
-if [ -e /etc/init.d/sysvikd ]; then
-        /etc/init.d/sysvikd start 
-fi
-
 if [ ! -e /etc/sysvik/node.dat ]; then
 	/bin/echo ""
 	/bin/echo "You need to register this node by typing \"sysvik -r\""
 fi
+
+if [ -e /usr/bin/systemctl ]; then
+	cp -f /var/lib/sysvik/sysvik-data.service /etc/systemd/system/sysvik-data.service
+		systemctl start sysvik-data
+		systemctl enable sysvik-data	
+else
+	cp -f /var/lib/sysvik/sysvikd /etc/init.d/sysvikd
+	if [ -e /sbin/chkconfig ]; then
+	        /sbin/chkconfig --add sysvikd
+	fi
+	if [ -e /etc/init.d/sysvikd ]; then
+	        /etc/init.d/sysvikd start 
+	fi
+fi
+
+
 EOF
 
 %preremove <<EOF
 	# If complete remove
-	if [ -e /etc/init.d/sysvikd ]; then
-	        /etc/init.d/sysvikd stop
-	fi
 
-	if [ -e /sbin/chkconfig ]; then
-	        /sbin/chkconfig --del sysvikd
+	if [ -e /etc/systemd/system/sysvik-data.service ]; then
+		systemctl stop sysvik-data
+		systemctl disable sysvik-data
+	else 	
+		if [ -e /etc/init.d/sysvikd ]; then
+		        /etc/init.d/sysvikd stop
+		fi
+
+		if [ -e /sbin/chkconfig ]; then
+		        /sbin/chkconfig --del sysvikd
+		fi
 	fi
 EOF
 
 %postremove << EOF
-	if [ -e /etc/init.d/sysvikd ]; then
-	        /etc/init.d/sysvikd start
-
-		if [ -e /sbin/chkconfig ]; then
-		        /sbin/chkconfig --add sysvikd
+	if [ -e /usr/bin/systemctl ]; then
+		systemctl start sysvik-data
+		systemctl enable sysvik-data
+	else 	
+		if [ -e /etc/init.d/sysvikd ]; then
+		        /etc/init.d/sysvikd start
+	
+			if [ -e /sbin/chkconfig ]; then
+			        /sbin/chkconfig --add sysvikd
+			fi
 		fi
 	fi
 EOF
