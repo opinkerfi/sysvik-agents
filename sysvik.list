@@ -4,8 +4,8 @@
 # Dæmi:
 # f 600 root root /etc/init.d/sysvik sysvik.initrd <-- current dir skrá
 
-%version 3.2r1
-%release 1
+%version 3.2r3
+%release 11
 %product Sysvik
 %copyright GPLv2
 %vendor Opin Kerfi
@@ -53,8 +53,8 @@ if [ -e /etc/init.d/sysvikd ]; then
         /etc/init.d/sysvikd stop
 fi
 
-if [ -e /usr/bin/systemctl ]; then
-	systemctl stop sysvik-data
+if [ -e /usr/lib/systemd/system//sysvik-data.service ]; then
+	/usr/bin/systemctl stop sysvik-data
 fi
 
 
@@ -95,9 +95,12 @@ if [ ! -e /etc/sysvik/node.dat ]; then
 fi
 
 if [ -e /usr/bin/systemctl ]; then
-	cp -f /var/lib/sysvik/sysvik-data.service /etc/systemd/system/sysvik-data.service
-		systemctl start sysvik-data
-		systemctl enable sysvik-data	
+	cp -f /var/lib/sysvik/sysvik-data.service /usr/lib/systemd/system//sysvik-data.service
+	/usr/bin/systemctl daemon-reload
+	/usr/bin/systemctl start sysvik-data.service
+	/usr/bin/systemctl enable sysvik-data.service
+	sleep 5
+	/usr/bin/systemctl restart sysvik-data.service
 else
 	cp -f /var/lib/sysvik/sysvikd /etc/init.d/sysvikd
 	if [ -e /sbin/chkconfig ]; then
@@ -107,21 +110,17 @@ else
 	        /etc/init.d/sysvikd start 
 	fi
 fi
-
-
 EOF
 
 %preremove <<EOF
 	# If complete remove
 
-	if [ -e /etc/systemd/system/sysvik-data.service ]; then
-		systemctl stop sysvik-data
-		systemctl disable sysvik-data
-	else 	
-		if [ -e /etc/init.d/sysvikd ]; then
-		        /etc/init.d/sysvikd stop
-		fi
-
+	if [ -e /usr/lib/systemd/system//sysvik-data.service ]; then
+		/usr/bin/systemctl stop sysvik-data.service
+		/usr/bin/systemctl disable sysvik-data.service
+	fi
+	if [ -e /etc/init.d/sysvikd ]; then
+	        /etc/init.d/sysvikd stop
 		if [ -e /sbin/chkconfig ]; then
 		        /sbin/chkconfig --del sysvikd
 		fi
@@ -129,16 +128,26 @@ EOF
 EOF
 
 %postremove << EOF
-	if [ -e /usr/bin/systemctl ]; then
-		systemctl start sysvik-data
-		systemctl enable sysvik-data
-	else 	
-		if [ -e /etc/init.d/sysvikd ]; then
-		        /etc/init.d/sysvikd start
-	
-			if [ -e /sbin/chkconfig ]; then
-			        /sbin/chkconfig --add sysvikd
-			fi
-		fi
+	# Remove copied files
+	if [ -e /usr/lib/systemd/system//sysvik-data.service ]; then
+		rm -f /usr/lib/systemd/system//sysvik-data.service
 	fi
+
+	if [ -e /etc/init.d/sysvikd ]; then
+		rm -f /etc/init.d/sysvikd
+	fi
+	
+	
+#	if [ -e /usr/bin/systemctl ]; then
+#		/usr/bin/systemctl start sysvik-data.service
+#		/usr/bin/systemctl enable sysvik-data.service
+#	else 	
+#		if [ -e /etc/init.d/sysvikd ]; then
+#		        /etc/init.d/sysvikd start
+#	
+#			if [ -e /sbin/chkconfig ]; then
+#			        /sbin/chkconfig --add sysvikd
+#			fi
+#		fi
+#	fi
 EOF

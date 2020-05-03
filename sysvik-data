@@ -117,7 +117,7 @@ sub cpu_idle(){
 }
 
 ################# MAIN
-if($opt_h || (!$opt_d && !$opt_b)){
+if($opt_h || (!$opt_d && !$opt_b && !$opt_q )){
 	print "sysvik [OPTIONS] ...\n\n";
 	print "Optional options:\n";
 	print "  -d\tDebug\n";

@@ -3,10 +3,10 @@ Description=Sysvik data processing
 
 [Service]
 Type=simple
-ExecStart=/usr/sbin/sysvik-data -d
+ExecStart=/usr/sbin/sysvik-data -q
 PIDFile=/var/run/sysvik.pid
+Restart=always
+RestartSec=5s
 
 [Install]
 WantedBy=multi-user.target
-
-
