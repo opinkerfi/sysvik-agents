@@ -21,7 +21,7 @@ my $local_db = "/var/lib/sysvik/updatecheck.db";
 my ($o_verb, $o_help, $o_run, $o_timeout, $o_updates, $o_warning, $o_critical, $o_force);
 
 ## Initial
-use lib qw(lib/);
+use lib qw(/var/lib/sysvik);
 use SVcore;
 
 my $sv = SVcore->new( logfile => $logfile, local_db => $local_db);
