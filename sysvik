@@ -32,7 +32,7 @@ my $logfile = "/var/log/sysvik.log";
 my $agent = "sysvik"; 
 
 # Agent version
-my $agent_version = "3.2r3";
+my $agent_version = "3.3r1";
 
 # Protocol version
 my $proto_version = "3.2";
