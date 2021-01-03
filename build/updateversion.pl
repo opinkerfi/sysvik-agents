@@ -12,7 +12,8 @@ if(!$new_version){
 my @files = (
 	"apwatch",
 	"sysvik",
-	"sysvik-data"
+	"sysvik-data",
+	"sysvik-updatecheck"
 );
 
 foreach(@files){
