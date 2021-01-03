@@ -1,0 +1,536 @@
+#!/usr/bin/perl -w
+# This is a template for perl scripts
+
+use strict;
+use Getopt::Long;
+my $version = "3.3r1";
+
+## Settings
+my $updfile = "/etc/sysvik/update.dat";
+my $spool = "/var/spool/sysvik";
+my $spoolfile = "$spool/updates";
+my $logfile = "/var/log/sysvik-oscheck.log";
+my $timeout = 120; # 120 sec
+my $check_every = 10800; # Force check every X sec
+
+# 
+my $local_db = "/var/lib/sysvik/updatecheck.db";
+
+
+## Global variables
+my ($o_verb, $o_help, $o_run, $o_timeout, $o_updates, $o_warning, $o_critical, $o_force);
+
+## Initial
+#use lib qw(/var/lib/sysvik);
+use lib qw(lib/);
+use SVcore;
+
+my $sv = SVcore->new( logfile => $logfile, local_db => $local_db);
+
+## Funtions
+sub check_options {
+	Getopt::Long::Configure ("bundling");
+	GetOptions(
+		'v'     => \$o_verb,            'verbose'	=> \$o_verb,
+		'h'     => \$o_help,            'help'	=> \$o_help,
+		'R'     => \$o_run,		'run' => \$o_run,
+		'U'     => \$o_updates,		'updates' => \$o_updates,
+		'F'     => \$o_force,		'force' => \$o_force,
+		'C:s'     => \$o_critical,	'critical:s' => \$o_critical,
+		'W:s'     => \$o_warning,	'warning:s' => \$o_warning,
+		'T:s'     => \$o_timeout,	'timeout:s' => \$o_timeout,
+	);
+
+	if(defined ($o_help)){
+		help();
+		exit 1;
+	}
+	
+	if(defined($o_verb)){
+		# Enable debug logging
+		$sv->SetDebug(1);
+	}
+
+	if(defined($o_timeout)){
+		if($o_timeout > 0){
+			$sv->printlog("Set timeout: $o_timeout");
+			$timeout = int($o_timeout);
+		}
+	}
+
+	if(!defined($o_run) && !defined($o_updates)){
+		help();
+		exit(0);
+	}
+
+	if(defined($o_run)){
+		run_check();
+	}
+
+	if(defined($o_updates)){
+		show_updates();
+	}
+}
+
+sub help() {
+	print "$0\n";
+        print <<EOT;
+-R, --run
+        print Run OS update check
+-F, --force
+        print Force a OS update check
+-U, --updates
+        print Show updates available (count)
+-C, --critical {VAL}
+        print Define value for critical
+-W, --warning {VAL}
+        print Define value for warning
+-T, --timeout
+        print Set timeout (default: 120 sec)
+-v, --verbose
+        print extra debugging information
+-h, --help
+	print this help message
+EOT
+}
+
+sub print_usage() {
+        print "Usage: $0 [-v] ]\n";
+}
+
+# suma (AIX):
+sub suma(){
+	my @packages;
+	if(-e "/usr/sbin/suma"){
+		open(TMP, "/usr/sbin/suma -x -a Action=Preview -a RqType=Latest -a FilterSysFile=/dev/null|");
+		my $i=0;
+		while(<TMP>){
+			chomp($_);
+			my @items = split;
+			my $package;
+			if($items[1] eq "SKIPPED:"){
+				$package = $items[2];
+			} elsif($items[1] eq "SUCCEEDED:"){
+				my @ua = split("/", $items[2]);
+				my $uac = scalar(@ua);
+				$package = $ua[$uac-1];
+			}
+
+			if($package){
+				$packages[$i] = "$package;;;;";
+				$i++;
+			}
+		}
+	}
+	return @packages;
+}
+
+sub DetectUpdateTool($$){
+	my ($os, $os_version) = @_;
+
+	my $product = $os;
+	my $product_version = $os_version;
+	my $utool;
+
+	if(-e "/usr/bin/yum"){
+		# Yum based
+		$utool = "yum";
+	} elsif (-e "/usr/bin/apt-get"){
+		# Apt based
+		$utool = "apt-get";
+	} else {
+		# Legacy detection
+		if($product eq "Red Hat Enterprise" && $product_version < 5){
+			# rhel 2-4
+			$utool = "up2date";
+			rhn_regcheck(); # Check if the node has registerd to RHN
+		} elsif ($product eq "Red Hat Enterprise"){
+			# rhel 5+
+			$utool = "yum";
+			rhn_regcheck(); # Check if the node has registerd to RHN
+		} elsif ($product eq "CentOS"){
+			# centos
+			$utool = "yum";
+		} elsif ($product eq "Debian"){
+			# Debian
+			$utool = "apt-get";
+		} elsif ($product eq "Ubuntu"){
+			# ubuntu
+			$utool = "apt-get";
+		} elsif ($product eq "Fedora"){
+			# Fedora
+			$utool = "yum";
+		} elsif ($product eq "openSUSE"){
+			# openSUSE
+			$utool = "rug";
+		} elsif ($product eq "SUSE Linux Enterprise Server"){
+			# SUSE Linux Enterprise Server
+			$utool = "rug";
+		} elsif ($product eq "AIX"){
+			$utool = "suma";
+		} else {
+			my @packages;
+			$packages[0] = "error;;error;;error";
+			write_out(@packages);
+			print "Error: Unable to find update tool.\n";
+			exit;
+		}
+	}
+	return $utool;
+}
+
+
+# Up2date (RHEL)
+sub up2date(){
+	open(TMP, "/usr/sbin/up2date --list --nox|");	
+	my ($package, $ver, $rel);
+	my $i=0;
+	my @packages;
+		my $on;
+		while(<TMP>){
+			chomp($_);
+			if($_ eq "This system may not be updated until it is associated with a channel."){
+				# RHN no channel
+				$sv->printlog("RHN error: This node is not associated with a channel.");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;channel";
+				$i++;
+				last;
+			} 
+
+			if($_ eq "Error Class Code: 31"){
+				# RHN not entitiled
+				$sv->printlog("RHN error: This node does not have RHN entitlement");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;entitlement";
+				$i++;
+				last;
+			}
+
+			if($_ eq "Error Class Code: 9"){
+				# RHN Not registered
+				$sv->printlog("RHN Error: This node isn't registered with the Red Hat Network");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;register";
+				$i++;
+				last;
+			}
+
+
+			if($_ eq ""){
+				$on=0;
+			}
+
+			if($on eq 1){
+				my($package, $ver, $rel) = split;
+				$packages[$i] = "$package;;$ver;;$rel";
+				$i++;
+			}
+
+			if($_ eq "----------------------------------------------------------"){
+				$on=1;
+			}
+		}
+	close(TMP);
+	if($i eq 0 && $? eq 256){
+		# Something strange happened, probably error.
+		$packages[$i] = "exit;;error;other";
+		$sv->printlog("Exit error 256: No packages from up2date.");
+	}
+	$sv->printlog("Exit code: $?");
+	return @packages;
+	exit;
+}
+
+# Yum based
+sub yum(){
+	# Get last yum run
+	my $updatecheck_last = $sv->seekstr("updatecheck_last");
+
+	# Get last updated for rpm db
+	my $mod_time=0;
+	if(-e "/var/lib/rpm/Basenames"){
+		my @farr = stat("/var/lib/rpm/Basenames"); # get file information
+		$mod_time = $farr[9]; # Last modify time
+		$sv->printlog("Last update time for /var/lib/rpm/Basenames $mod_time");
+	}
+
+	my $sec_since_last = time() - $updatecheck_last;
+	my $sec_next_check = $check_every - $sec_since_last;
+	print "Last check: $updatecheck_last\n" if $o_verb;
+	print "Mod time: $mod_time\n" if $o_verb;
+	print "Sec since last run: $sec_since_last\n" if $o_verb;
+	# Run if never run, rpm database has changed or every X sec
+	if(!$updatecheck_last || ($mod_time && $mod_time > $updatecheck_last) || ($sec_since_last > $check_every) || $o_force){
+		print "Force re-checkrun.. \n" if $o_verb;
+		# Update updatecheck_last
+		$sv->putstr("updatecheck_last", time());
+
+		open(TMP, "/usr/bin/yum check-update 2>&1|");	
+		my ($package, $ver, $rel);
+		my $i=0;
+		my @packages;
+		my $on=0;
+		while(<TMP>){
+			chomp($_);
+
+			if($_ eq "This system is not subscribed to any channels."){
+				# RHN no channel
+				$sv->printlog("RHN error: This node is not associated with a channel.");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;channel";
+				$i++;
+				last;
+			}
+	
+			if($_ eq "Error Class Code: 31"){
+				# RHN not entitiled
+				undef(@packages);
+				$i=0;
+				$sv->printlog("RHN error: This node does not have RHN entitlement");
+				$packages[$i] = "rhn;;error;;entitlement";
+				$i++;
+				last;
+			}
+
+			if($_ eq "Error Class Code: 9"){
+				# RHN Not registered
+				$sv->printlog("RHN Error: This node isn't registered with the Red Hat Network");
+				undef(@packages);
+				$i=0;
+				$packages[$i] = "rhn;;error;;register";
+				$i++;
+				last;
+			}
+
+			if($on eq 1 && $_ eq " "){
+				$on=0;
+			}
+
+			if($on eq 1){
+				my ($packarch, $verrel, $packtype) = split;
+				my($package, $arch) = split("[.]", $packarch);
+				my($ver, $rel) = split("-", $verrel);
+				$packages[$i] = "$package;;$ver;;$rel;;$packtype";
+				$i++;
+			}
+
+			if($_ eq ""){
+				$on=1;
+			}
+		}
+		close(TMP);
+		write_out(@packages);
+		return 1;
+	} else {
+		print "Check after $sec_next_check secs\n" if $o_verb;
+		return 0;
+	}
+}
+
+# If this is a Red Hat enterprise node we check if the node is
+# registered to RHN which is required if using up2date.
+# If this node is not registerd, we don't do the update check.
+sub rhn_regcheck(){
+	if(!-e "/etc/sysconfig/rhn/systemid"){
+		# Node not registerd
+		$sv->printlog("RHN Error: This node isn't registered with the Red Hat Network");
+		my @packages;
+		$packages[0] = "rhn;;error;;register";
+		write_out(@packages);
+		exit;
+	}
+}
+
+sub write_out($){
+	my @packages = @_;
+
+	if(!-e $spool){
+		$sv->printlog("Spool directory $spool does not exist. Create it.");
+		mkdir $spool, 0750;
+	}
+
+	my $count_packages = scalar(@packages);
+	$sv->printlog("Write out $count_packages to $spoolfile");
+	open(SPOOL, ">$spoolfile");
+	for(my $i=0; $i < $count_packages; $i++){
+		print SPOOL "$packages[$i]\n";
+	}
+	close(SPOOL);
+}
+
+# Deb based
+sub apt_get(){
+	system("/usr/bin/apt-get update -qq");
+	open(U, "/usr/bin/apt-get --no-download --trivial-only -u upgrade 2>&1|");
+	my $on;
+	my @big_arr;
+	my $x=0;
+	my @packages;
+	while(<U>){
+		chomp($_);
+
+		my $c1 = substr($_, 0, 1);
+		my $c2 = substr($_, 1, 1);
+		$c1 = ord($c1);
+		$c2 = ord($c2);
+
+		if($_ eq "The following packages have been kept back:"){
+			$on=1;
+		} elsif($_ eq "The following packages will be upgraded:"){
+			$on=1;
+		} elsif($on eq 1 && ($c1 eq "32" && $c2 eq "32")){
+			$on=1;
+			my $list = substr($_, 2);
+			my @list_arr = split(" ", $list);
+			for(my $i=0; $i < scalar(@list_arr); $i++){
+				$packages[$x] = "$list_arr[$i]";
+				$x++;
+			}
+		} else {
+			$on=0;
+		}	
+	}
+	close(U);
+	return @packages;
+}
+
+# Rub based
+sub rug(){
+	my @packages;
+	if(-e "/usr/bin/zypper"){
+		open(U, "/usr/bin/zypper list-updates 2>&1|");
+		my $i=0;
+		my $on=0;
+		while(<U>){
+			chomp($_);
+			my @line = split;
+			if($_ =~ "-----------------"){
+				$on=1;
+			} else {
+				if($on){
+					my @arr = split(/\|/, $_);
+					my $pack = $arr[1];
+					$pack =~ s/\s*$//g; # Strip whitespace
+					$pack =~ s/^\s*//g; # Strip whitespace
+                                
+					my $ver = $arr[2];
+					$ver =~ s/\s*$//g; # Strip whitespace
+					$ver =~ s/^\s*//g; # Strip whitespace
+                                
+	                                $packages[$i] = "$pack;;$ver;;";
+				}
+			}
+		}
+		close(U);
+		return @packages;
+	} elsif (-e "/usr/bin/rug") {
+		open(U, "/usr/bin/rug list-updates 2>&1|");
+		my $i=0;
+		my $on=0;
+		while(<U>){
+			chomp($_);
+			my @line = split;
+			my $pack = $line[5];
+			my $verrel = $line[7];
+			if($pack ne "" && $pack ne "|"){
+				$on=1;
+				my ($ver, $rel) = split("-", $verrel);
+				$packages[$i] = "$pack;;$ver;;$rel";
+				$i++;
+			} else {
+				$on=0;
+			}
+		}
+		close(U);
+		return @packages;
+	} else {
+		print "Unable to find updatetool\n";
+	}
+}
+
+sub show_updates(){
+	$sv->printlog("Opening $spoolfile");
+	if(-e $spoolfile){
+		open(F, $spoolfile);
+		my $i=0;
+		while(<F>){
+			chomp($_);
+			if($i eq 0){
+				my ($package, $ver, $rel, $packtype) = split(";", $_);
+
+				if($rel eq "error"){
+					print "Error: Unable to get information about updates (1)\n";
+					exit(1);
+				}
+			}
+			$i++;
+		}
+		close(F);
+		# Print out number of updates available
+		if($o_critical && $i >= $o_critical){
+			print "$i updates available (critical: $o_critical)\n";
+			exit(1);			
+		} elsif($o_warning && $i >= $o_warning){
+			print "$i updates avaiable (warning: $o_warning)\n";
+			exit(2);
+		} else {
+			print "$i\n";
+			exit(0);
+		}
+	} else {
+		print "Error: Unable to get information about updates (2)\n";
+		exit(1);
+	}
+}
+
+sub run_check(){
+	my ($os_type, $os_name, $os_version, $os_version_minor, $os_id, $os_id_like, $os_version_id, $os_platform_id, $os_pretty_name) = $sv->GetOsInformation();
+	my $utool = DetectUpdateTool($os_name, $os_version);
+	print "Update tool is $utool\n" if $o_verb;
+	$SIG{'ALRM'} = sub {
+		print STDERR "Timeout in fetching update information\n";
+		exit(1);
+	};
+
+	alarm($timeout);
+	if($utool eq "yum"){
+		yum();
+	} else {
+		my $updatecheck_last = $sv->seekstr("updatecheck_last");
+		my $sec_since_last = time() - $updatecheck_last;
+		my $sec_next_check = $check_every - $sec_since_last;
+		print "Last check: $updatecheck_last\n" if $o_verb;
+		print "Sec since last run: $sec_since_last\n" if $o_verb;
+
+		# Run if never run, rpm database has changed or every X sec
+		if(!$updatecheck_last || ($sec_since_last > $check_every)){
+			print "Force re-checkrun.. \n" if $o_verb;
+			# Update updatecheck_last
+			$sv->putstr("updatecheck_last", time());
+	
+			my @packages;
+			if($utool eq "apt-get"){
+				@packages = apt_get();
+			} elsif($utool eq "up2date"){
+				@packages = up2date();
+			} elsif($utool eq "suma"){
+				@packages = suma();
+			} elsif($utool eq "rug"){
+				@packages = rug();
+			}
+			write_out(@packages);
+		} else {
+			print "Check after $sec_next_check secs\n" if $o_verb;
+			return 0;
+		}
+	}
+}
+
+## Main
+check_options();
+
