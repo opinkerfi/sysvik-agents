@@ -18,7 +18,7 @@ my $local_db = "/var/lib/sysvik/updatecheck.db";
 
 
 ## Global variables
-my ($o_verb, $o_help, $o_run, $o_timeout, $o_updates, $o_warning, $o_critical, $o_force);
+my ($o_verb, $o_help, $o_run, $o_timeout, $o_updates, $o_warning, $o_critical, $o_force, $o_debug);
 
 ## Initial
 use lib qw(/var/lib/sysvik);
@@ -30,6 +30,7 @@ my $sv = SVcore->new( logfile => $logfile, local_db => $local_db);
 sub check_options {
 	Getopt::Long::Configure ("bundling");
 	GetOptions(
+		'd'     => \$o_debug,            'verbose'	=> \$o_debug,
 		'v'     => \$o_verb,            'verbose'	=> \$o_verb,
 		'h'     => \$o_help,            'help'	=> \$o_help,
 		'R'     => \$o_run,		'run' => \$o_run,
@@ -95,6 +96,12 @@ EOT
 
 sub print_usage() {
         print "Usage: $0 [-v] ]\n";
+}
+
+sub printdebug($){
+	my ($str) = @_;
+
+	print "$str\n" if $o_debug;
 }
 
 # suma (AIX):
@@ -306,6 +313,11 @@ sub yum(){
 				last;
 			}
 
+			if($_ =~ "Obsoleting Packages"){
+				printdebug("Obsoleting Packages begin. Ignore next lines");
+				$on=0;
+			}
+
 			if($on eq 1 && $_ eq " "){
 				$on=0;
 			}
@@ -316,6 +328,8 @@ sub yum(){
 				my($ver, $rel) = split("-", $verrel);
 				$packages[$i] = "$package;;$ver;;$rel;;$packtype";
 				$i++;
+			} else {
+				printdebug("Ignore line: $_");
 			}
 
 			if($_ eq ""){
@@ -357,6 +371,7 @@ sub write_out($){
 	$sv->printlog("Write out $count_packages to $spoolfile");
 	open(SPOOL, ">$spoolfile");
 	for(my $i=0; $i < $count_packages; $i++){
+		printdebug("$packages[$i]");
 		print SPOOL "$packages[$i]\n";
 	}
 	close(SPOOL);
