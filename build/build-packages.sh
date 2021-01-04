@@ -1,7 +1,7 @@
 #!/bin/sh
 # Execute this from build directory
-VERSION=3.2r3
-RELEASE=29
+VERSION=3.3r1
+RELEASE=5
 LICENSE=GPLv2
 VENDOR="Opin Kerfi"
 DESCRIPTION="Agent for Sysvik system management service, www.sysvik.com. Sysvik monitors the system and reports to the Sysvik network about current status which can be seen in the central web application located at www.sysvik.com."
@@ -36,7 +36,7 @@ mkdir $BUILD_ROOT/var/lib/sysvik -p
 install -m 750 -o root -g root ../sysvik $BUILD_ROOT/usr/sbin/sysvik
 install -m 750 -o root -g root ../lib/SVcore.pm $BUILD_ROOT/var/lib/sysvik/SVcore.pm
 install -m 750 -o root -g root ../sysvik-data $BUILD_ROOT/usr/sbin/sysvik-data
-install -m 750 -o root -g root ../apwatch $BUILD_ROOT/usr/sbin/apwatch
+install -m 750 -o root -g root ../sysvik-updatecheck $BUILD_ROOT/usr/sbin/sysvik-updatecheck
 install -m 755 -o root -g root ../sysvik.8.man.gz $BUILD_ROOT/usr/share/man/man8/sysvik.8.gz
 install -m 600 -o root -g root ../sysvik.cron $BUILD_ROOT/etc/cron.d/sysvik
 install -m 755 -o root -g root ../init.d/sysvikd $BUILD_ROOT/var/lib/sysvik/sysvikd
