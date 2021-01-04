@@ -602,9 +602,11 @@ sub GetOsFactsRelease(){
 		while(<F>){
 			chomp($_);
 			my ($key , $val) = split("=" , $_);
-			$val =~ s/^"//i; # Remove " from begin
-			$val =~ s/"$//i; # Remove " from end
-			$fact{"$key"} = $val;
+			if($key && $val){
+				$val =~ s/^"//i; # Remove " from begin
+				$val =~ s/"$//i; # Remove " from end
+				$fact{"$key"} = $val;
+			}
 		}
 		close(F);
 	
