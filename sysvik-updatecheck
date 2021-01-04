@@ -9,7 +9,7 @@ my $version = "3.3r1";
 my $updfile = "/etc/sysvik/update.dat";
 my $spool = "/var/spool/sysvik";
 my $spoolfile = "$spool/updates";
-my $logfile = "/var/log/sysvik-oscheck.log";
+my $logfile = "/var/log/sysvik-updatecheck.log";
 my $timeout = 120; # 120 sec
 my $check_every = 10800; # Force check every X sec
 
@@ -30,7 +30,7 @@ my $sv = SVcore->new( logfile => $logfile, local_db => $local_db);
 sub check_options {
 	Getopt::Long::Configure ("bundling");
 	GetOptions(
-		'd'     => \$o_debug,            'verbose'	=> \$o_debug,
+		'd'     => \$o_debug,            'debug'	=> \$o_debug,
 		'v'     => \$o_verb,            'verbose'	=> \$o_verb,
 		'h'     => \$o_help,            'help'	=> \$o_help,
 		'R'     => \$o_run,		'run' => \$o_run,
@@ -261,7 +261,6 @@ sub yum(){
 	if(-e "/var/lib/rpm/Basenames"){
 		my @farr = stat("/var/lib/rpm/Basenames"); # get file information
 		$mod_time = $farr[9]; # Last modify time
-		$sv->printlog("Last update time for /var/lib/rpm/Basenames $mod_time");
 	}
 
 	my $sec_since_last = time() - $updatecheck_last;
@@ -271,7 +270,7 @@ sub yum(){
 	print "Sec since last run: $sec_since_last\n" if $o_verb;
 	# Run if never run, rpm database has changed or every X sec
 	if(!$updatecheck_last || ($mod_time && $mod_time > $updatecheck_last) || ($sec_since_last > $check_every) || $o_force){
-		print "Force re-checkrun.. \n" if $o_verb;
+		$sv->printlog("Checking for updates. Last cheked: $sec_since_last secs ago");
 		# Update updatecheck_last
 		$sv->putstr("updatecheck_last", time());
 
@@ -368,7 +367,7 @@ sub write_out($){
 	}
 
 	my $count_packages = scalar(@packages);
-	$sv->printlog("Write out $count_packages to $spoolfile");
+	$sv->printlog("$count_packages updates available");
 	open(SPOOL, ">$spoolfile");
 	for(my $i=0; $i < $count_packages; $i++){
 		printdebug("$packages[$i]");
