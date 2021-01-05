@@ -270,7 +270,7 @@ sub yum(){
 	print "Sec since last run: $sec_since_last\n" if $o_verb;
 	# Run if never run, rpm database has changed or every X sec
 	if(!$updatecheck_last || ($mod_time && $mod_time > $updatecheck_last) || ($sec_since_last > $check_every) || $o_force){
-		$sv->printlog("Checking for updates. Last cheked: $sec_since_last secs ago");
+		$sv->printlog("Checking for updates using yum. Last cheked: $sec_since_last secs ago");
 		# Update updatecheck_last
 		$sv->putstr("updatecheck_last", time());
 
@@ -503,7 +503,7 @@ sub run_check(){
 
 		# Run if never run, rpm database has changed or every X sec
 		if(!$updatecheck_last || ($sec_since_last > $check_every) || $o_force){
-			print "Force re-checkrun.. \n" if $o_verb;
+			$sv->printlog("Checking for updates using yum. Last cheked: $sec_since_last secs ago");
 			# Update updatecheck_last
 			$sv->putstr("updatecheck_last", time());
 	
